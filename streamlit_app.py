@@ -89,7 +89,7 @@ with st.sidebar:
     st.write("✔️ Pastikan pencahayaan gambar terang.")
     st.write("✔️ Fokuskan kamera tepat pada permukaan beton.")
 
-st.title("🏗️ Deteksi Retak pada Beton AI")
+st.title("🏗️ Sistem Cerdas Deteksi Retak Beton")
 st.markdown("Unggah foto permukaan beton untuk mendeteksi apakah terdapat retakan atau tidak secara instan.")
 st.markdown("---")
 
