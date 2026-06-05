@@ -2,85 +2,143 @@ import streamlit as st
 import tensorflow as tf
 import numpy as np
 from PIL import Image
+import os
+import gdown
 
-# 1. Konfigurasi Halaman
-st.set_page_config(page_title="Deteksi Retak Beton", page_icon="🏗️", layout="centered")
+# --- PATCH BYPASS ERROR KERAS 3 ---
+# Memaksa Keras untuk mengabaikan parameter 'quantization_config' yang bikin error
+def apply_keras_patch():
+    layer_classes = [
+        tf.keras.layers.Dense, 
+        tf.keras.layers.Conv2D, 
+        tf.keras.layers.MaxPooling2D, 
+        tf.keras.layers.Flatten, 
+        tf.keras.layers.Dropout
+    ]
+    for layer_cls in layer_classes:
+        try:
+            orig_from_config = layer_cls.from_config
+            def make_patched_from_config(orig_func):
+                def patched(cls, config):
+                    config.pop('quantization_config', None)
+                    return orig_func(config)
+                return classmethod(patched)
+            layer_cls.from_config = make_patched_from_config(orig_from_config)
+        except Exception:
+            pass
 
-# 2. Fungsi untuk Memuat Model dengan Caching
-# Menggunakan st.cache_resource agar model tidak di-load ulang setiap kali ada interaksi di UI
-@st.cache_resource
-def load_model():
-    # Pastikan file 'model_crack_beton.h5' berada di folder yang sama dengan script ini
-    model_path = 'model_crack_beton.h5'
-    model = tf.keras.models.load_model(model_path)
-    return model
+apply_keras_patch()
+# ----------------------------------
 
-# 3. Setup UI Aplikasi
-st.title("🏗️ Aplikasi Klasifikasi Permukaan Beton")
-st.write("Unggah gambar permukaan beton untuk menganalisis dan mendeteksi apakah terdapat retakan.")
+# 1. Konfigurasi Halaman (Diubah menjadi layout 'wide')
+st.set_page_config(page_title="Prediksi Retak Beton", layout="wide", page_icon="🏗️")
 
-# Mencoba memuat model
-try:
-    model = load_model()
-    st.sidebar.success("Model berhasil dimuat!")
-except Exception as e:
-    st.sidebar.error(f"Gagal memuat model. Pastikan file 'model_crack_beton.h5' ada di folder yang sama. Error: {e}")
-    st.stop()
-
-# Daftar Kelas (Sesuai dengan urutan saat training)
+# 2. Definisikan Kelas (Label)
 class_names = ['Retak', 'Tidak_Retak']
 
-# 4. Fitur Upload Gambar
-uploaded_file = st.file_uploader("Pilih file gambar beton...", type=["jpg", "jpeg", "png"])
+# 3. Fungsi untuk Memuat Model
+@st.cache_resource
+def load_model():
+    model_path = 'model_crack_beton.h5'
+    
+    if not os.path.exists(model_path):
+        file_id = '1yaUHZ5p6aSxFuRYduiQKMwWpIJwf-if3' 
+        try:
+            gdown.download(id=file_id, output=model_path, quiet=False)
+        except Exception as e:
+            st.error(f"Gagal mengunduh model dari GDrive: {e}")
+            return None
+        
+    try:
+        model = tf.keras.models.load_model(model_path, compile=False)
+        return model
+    except Exception as e:
+        st.error(f"Gagal memuat model. Detail: {e}")
+        return None
 
-if uploaded_file is not None:
-    # Membaca gambar menggunakan PIL
-    image = Image.open(uploaded_file)
-    
-    # Konversi ke format RGB untuk menghindari isu channel jika gambar transparan (RGBA)
-    image = image.convert('RGB')
-    
-    # Menampilkan gambar yang diunggah
-    st.image(image, caption='Gambar Beton yang Diunggah', use_container_width=True)
-    
-    with st.spinner("Sedang memproses dan menganalisis gambar..."):
-        # 5. Pre-processing Gambar agar sesuai input model (150x150)
-        img_height = 150
-        img_width = 150
-        
-        # Mengubah ukuran gambar
-        img_resized = image.resize((img_width, img_height))
-        
-        # Mengubah menjadi array numpy
-        img_array = tf.keras.preprocessing.image.img_to_array(img_resized)
-        
-        # Menambahkan dimensi batch (dari [150, 150, 3] menjadi [1, 150, 150, 3])
-        img_array = tf.expand_dims(img_array, 0)
-        
-        # 6. Melakukan Prediksi
-        predictions = model.predict(img_array)
-        
-        # Mengambil skor probabilitas tertinggi (Logika yang sama dengan kode Colab Anda)
-        if len(class_names) == 2 and predictions.shape[-1] == 1:
-            # Jika model menggunakan klasifikasi biner dengan sigmoid (output 1 neuron)
-            predicted_class_idx = 1 if predictions[0][0] >= 0.5 else 0
-            konfidensi = predictions[0][0] if predicted_class_idx == 1 else 1 - predictions[0][0]
-            konfidensi = konfidensi * 100
-        else:
-            # Jika menggunakan softmax atau output multi-kolom
-            score = tf.nn.softmax(predictions[0]) if len(class_names) > 2 else predictions[0]
-            predicted_class_idx = np.argmax(predictions[0])
-            konfidensi = np.max(score) * 100
-            
-        hasil_prediksi = class_names[predicted_class_idx]
-        
-    # 7. Menampilkan Hasil Prediksi ke Layar
-    st.divider()
-    st.subheader("Hasil Analisis:")
-    
-    if hasil_prediksi == 'Retak':
-        st.error(f"**Status Permukaan: {hasil_prediksi}**")
+# 4. Fungsi untuk Memprediksi Gambar
+def prediksi_gambar(image_pil, model):
+    img_height = 150
+    img_width = 150
+
+    img_resized = image_pil.resize((img_width, img_height))
+    img_array = np.array(img_resized, dtype=np.float32)
+    img_array = np.expand_dims(img_array, axis=0)
+
+    predictions = model.predict(img_array)
+    score = predictions[0]
+
+    if len(class_names) == 2 and predictions.shape[-1] == 1:
+        predicted_class_idx = 1 if score[0] >= 0.5 else 0
+        konfidensi = score[0] if predicted_class_idx == 1 else 1 - score[0]
+        konfidensi = konfidensi * 100
     else:
-        st.success(f"**Status Permukaan: {hasil_prediksi}**")
-        
-    st.metric(label="Tingkat Kepercayaan (Confidence Score)", value=f"{konfidensi:.2f}%")
+        predicted_class_idx = np.argmax(score)
+        konfidensi = np.max(score) * 100
+
+    hasil_prediksi = class_names[predicted_class_idx]
+    return hasil_prediksi, konfidensi
+
+# 5. UI Streamlit - Sidebar & Header
+with st.sidebar:
+    st.image("https://cdn-icons-png.flaticon.com/512/1053/1053381.png", width=100) # Ikon ilustrasi
+    st.header("ℹ️ Tentang Aplikasi")
+    st.write("Aplikasi ini menggunakan model *Artificial Intelligence* (AI) berbasis Deep Learning untuk mendeteksi keberadaan retakan pada permukaan beton.")
+    st.markdown("---")
+    st.write("**Tips Penggunaan:**")
+    st.write("✔️ Pastikan pencahayaan gambar terang.")
+    st.write("✔️ Fokuskan kamera tepat pada permukaan beton.")
+
+st.title("🏗️ Deteksi Retak pada Beton AI")
+st.markdown("Unggah foto permukaan beton untuk mendeteksi apakah terdapat retakan atau tidak secara instan.")
+st.markdown("---")
+
+with st.spinner("Sedang menyiapkan model AI... (Memakan waktu sesaat untuk unduh awal)"):
+    model_beton = load_model()
+
+if model_beton is None:
+    st.stop()
+
+# 6. Tata Letak Menggunakan Kolom
+col1, col2 = st.columns([1, 1], gap="large") # Membagi layar menjadi 2 kolom dengan jarak yang lega
+
+with col1:
+    st.subheader("📤 1. Unggah Gambar")
+    uploaded_file = st.file_uploader("Pilih gambar beton Anda...", type=["jpg", "jpeg", "png"])
+    
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file).convert('RGB')
+        st.image(image, caption="Pratinjau Gambar", use_container_width=True)
+
+with col2:
+    st.subheader("📊 2. Hasil Analisis")
+    
+    if uploaded_file is None:
+        st.info("👈 Silakan unggah gambar di kolom sebelah kiri terlebih dahulu.")
+    else:
+        # Tombol dibikin selebar container
+        if st.button("🔍 Analisis Gambar Sekarang", use_container_width=True):
+            with st.spinner("AI sedang menganalisis pola permukaan..."):
+                hasil, konfidensi = prediksi_gambar(image, model_beton)
+            
+            st.markdown("### Kesimpulan:")
+            
+            # Tampilan jika Retak
+            if hasil == 'Retak':
+                st.error(f"⚠️ **STATUS: BETON TERDEKTEKSI RETAK**")
+                st.write(f"**Tingkat Keyakinan AI:** {konfidensi:.2f}%")
+                st.progress(int(konfidensi)) # Menampilkan visual bar
+                
+                # Insight tambahan
+                with st.expander("Saran Tindakan"):
+                    st.write("Disarankan untuk memanggil teknisi sipil guna menginspeksi lebih lanjut struktur beton ini. Retakan bisa mempengaruhi integritas bangunan.")
+            
+            # Tampilan jika Tidak Retak
+            else:
+                st.success(f"✅ **STATUS: BETON {hasil.replace('_', ' ').upper()}**")
+                st.write(f"**Tingkat Keyakinan AI:** {konfidensi:.2f}%")
+                st.progress(int(konfidensi)) # Menampilkan visual bar
+                
+                # Insight tambahan
+                with st.expander("Saran Tindakan"):
+                    st.write("Kondisi beton secara visual aman dari retakan di area yang difoto. Tetap lakukan perawatan rutin.")
