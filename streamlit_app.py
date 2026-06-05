@@ -42,7 +42,7 @@ def load_model():
     model_path = 'model_crack_beton.h5'
     
     if not os.path.exists(model_path):
-        file_id = '1yaUHZ5p6aSxFuRYduiQKMwWpIJwf-if3' 
+        file_id = '1Nm5U4ZU6iSCZ-oOCoVNeR15cSssH03Ng' 
         try:
             gdown.download(id=file_id, output=model_path, quiet=False)
         except Exception as e:
